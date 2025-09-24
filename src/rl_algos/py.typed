@@ -1,0 +1,2 @@
+[tool.hatch.build]
+include = ["src/rl_algos/py.typed"]

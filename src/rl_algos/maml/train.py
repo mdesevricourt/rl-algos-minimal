@@ -8,7 +8,7 @@ import torch.nn as nn
 from agent import Agent, Log
 from maml_env import HalfCheetahDirecBulletEnv
 
-from drlalgos.algos.maml.extra import (
+from rl_algos.algos.maml.extra import (
     hyperparameters,
     inner_loop,
     plot_grad_flow,

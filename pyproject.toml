@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rl-algos"
+version = "0.1.0"               # or use setuptools_scm (see §7)
+description = "From-scratch deep RL algorithms in PyTorch."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "Maxime Cugnon de Sévricourt" }]
+keywords = ["reinforcement-learning", "pytorch", "gymnasium"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Typing :: Typed",
+]
+dependencies = [
+  "torch",
+  "gymnasium>=0.29",
+  "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "mypy", "tensorboard", "black", "ipykernel"]
+
+[project.scripts]                 # console entry points
+pg-train = "rl_algos.pg.train:main"
+pg-eval  = "rl_algos.pg.eval:main"
+pg-play  = "rl_algos.pg.play:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rl_algos"]
+
+[tool.mypy]
+packages = ["rl_algos"]
+strict = true

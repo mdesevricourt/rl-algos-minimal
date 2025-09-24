@@ -1,11 +1,25 @@
+"""
+Agent implementations for the MAML-based RL experiments.
+
+This module provides:
+- PolicyNetwork: parameterized stochastic policy producing a mean and variance.
+- ValueNetwork: baseline/value estimator.
+- Agent: helper that uses the policy and value nets to sample trajectories and
+  compute auxiliary data (advantages, returns, log-probs).
+- Log: simple container for meta-training statistics.
+
+Docstrings are light-weight and focused on intended behaviour and returned values.
+"""
+
 import random
 from collections import deque
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from drlalgos.algos.maml.extra import scaling
 from torch.distributions.multivariate_normal import MultivariateNormal
+
+from rl_algos.maml.extra import scaling
 
 torch.manual_seed(0)
 random.seed(0)
@@ -14,6 +28,15 @@ random.seed(0)
 class PolicyNetwork(
     nn.Module
 ):  # create the PolicyNetwork class as a subclass for nn.module
+    """
+    Stochastic policy network.
+
+    The network outputs a mean vector and a (positive) scale parameter for each action
+    dimension. Supports two forward modes:
+      - default: uses internal nn.Module parameters
+      - manual: accepts a weights dict for evaluating alternate parameters (useful for MAML).
+    """
+
     def __init__(self, env, gamma):
         super(PolicyNetwork, self).__init__()
 
@@ -37,6 +60,16 @@ class PolicyNetwork(
         self.loss_history = []
 
     def forward(self, x, weights):
+        """
+        Forward pass returning (mean, scale).
+
+        Args:
+            x: input state tensor.
+            weights: dict of named parameters for "manual" forward; if falsy, use module params.
+
+        Returns:
+            (mean_tensor, scale_tensor)
+        """
         if (
             not weights
         ):  # if no weights are provided, use the parameters stored into the model
@@ -74,6 +107,13 @@ class PolicyNetwork(
 class ValueNetwork(
     nn.Module
 ):  # create the Value Network for a subclass of Neural Networks module
+    """
+    Value function approximator.
+
+    Behaviour similar to PolicyNetwork: supports both module-parameter and manual
+    forward using a weights dict. Returns a scalar value estimate for states.
+    """
+
     def __init__(self, env, gamma):
         super(ValueNetwork, self).__init__()
         self.state_space = env.observation_space.shape[0]
@@ -90,6 +130,16 @@ class ValueNetwork(
         self.gamma = gamma
 
     def forward(self, x, weights):
+        """
+        Forward pass for value prediction.
+
+        Args:
+            x: state tensor.
+            weights: optional dict of parameters for manual evaluation.
+
+        Returns:
+            value tensor of shape (1,) or (batch_size, 1)
+        """
         if not weights:
             model = nn.Sequential(
                 self.l1,
@@ -114,12 +164,27 @@ class ValueNetwork(
 
 
 class Agent:
+    """
+    High-level agent that holds policy and value networks and provides utilities
+    to sample trajectories and compute training targets (advantages, returns).
+    """
+
     def __init__(self, env, gamma):
         self.policy_net = PolicyNetwork(env, gamma)
         self.value_net = ValueNetwork(env, gamma)
         self.gamma = gamma
 
     def select_action(self, state, weights=[]):
+        """
+        Sample an action from the policy for a single state.
+
+        Args:
+            state: state tensor.
+            weights: optional policy-parameter dict for manual evaluation.
+
+        Returns:
+            (action_tensor (detached), log_prob_tensor)
+        """
         out1, out2 = self.policy_net(state, weights)
         for i in out2:
             if i > 10:
@@ -131,6 +196,17 @@ class Agent:
         return (action.detach(), log_prob)
 
     def prob(self, states, actions, weights={}):
+        """
+        Compute log-probabilities and entropy for given state-action pairs.
+
+        Args:
+            states: batched states tensor.
+            actions: corresponding actions tensor.
+            weights: optional policy parameter dict.
+
+        Returns:
+            (log_prob_tensor, entropy_tensor)
+        """
         out1, out2 = self.policy_net(states, weights)
         m = MultivariateNormal(out1, torch.diag(1 / out2))
         log_prob = m.log_prob(actions)
@@ -140,8 +216,27 @@ class Agent:
     def sample_traj(
         self, env, K, H, weights_pol={}, weights_val={}
     ):  # env is the environment, K is the number of trajectories, N is the time horizon
-        #  Collect Trajectories
+        """
+        Sample K trajectories of horizon H using current (or provided) weights.
 
+        Args:
+            env: Gym environment instance.
+            K: number of trajectories to collect.
+            H: horizon (max steps per trajectory).
+            weights_pol: optional policy parameters for sampling.
+            weights_val: optional value parameters for evaluation.
+
+        Returns:
+            A tuple containing:
+              - A_k: normalized advantages tensor
+              - av_reward: average episodic reward across K trajectories
+              - log_probs: tensor of log-probs collected (not detached)
+              - T_batch_states: tensor of stacked states
+              - T_batch_actions: tensor of stacked actions
+              - V.squeeze(): tensor of value estimates
+              - G.detach(): tensor of returns (detached)
+              - av_lengths: average episode length
+        """
         loss = torch.tensor(0.0)
         losses = []
 
@@ -271,6 +366,11 @@ class Agent:
         return (loss, loss_V)
 
     def get_dict_param_pol(self):
+        """
+        Return a dictionary mapping policy parameter names to parameter tensors.
+
+        Useful to obtain a copy of current policy parameters for meta-learning.
+        """
         param = {}
 
         for name, p in self.policy_net.named_parameters():
@@ -279,6 +379,9 @@ class Agent:
         return param
 
     def get_dict_param_val(self):
+        """
+        Return a dictionary mapping value-network parameter names to parameter tensors.
+        """
         param = {}
 
         for name, p in self.value_net.named_parameters():
@@ -288,6 +391,12 @@ class Agent:
 
 
 class Log(object):
+    """
+    Minimal logging container used during meta-training.
+
+    Attributes mirror names used in the original code: meta_loss, val_returns, etc.
+    """
+
     def __init__(self, hyper_param):
         self.meta_iter = hyper_param.meta_iters
         self.meta_batch_size = hyper_param.meta_batch_size
@@ -300,11 +409,17 @@ class Log(object):
         self.number_of_iter = 500
 
     def meta_append(self, val_return, meta_loss, meta_loss_V):
+        """
+        Append meta-validation return and meta-loss statistics.
+        """
         self.val_returns.append(val_return)
         self.meta_loss.append(meta_loss)
         self.meta_loss_V.append(meta_loss_V)
 
     def append(self, av_reward, loss, loss_V):
+        """
+        Append per-epoch statistics (kept for compatibility with other buffers).
+        """
         self.av_rewards.append(av_reward)
         self.steps.append(self.N * self.T)
         self.S += self.N * self.T
