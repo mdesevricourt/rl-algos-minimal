@@ -5,6 +5,7 @@ Created on Fri Oct  8 16:03:38 2021
 """
 
 from collections import deque, namedtuple
+from dataclasses import dataclass
 
 import torch
 
@@ -89,26 +90,44 @@ class Trajectory:
         G2 = torch.tensor(list(G1), dtype=rewards.dtype)
         self.G = G2
 
-        log_probs = torch.tensor(list(self.log_probs), dtype=rewards.dtype)
+        log_probs = torch.stack(list(self.log_probs))
         self.logpiG = log_probs * self.G
 
         self.sum_logpiG = torch.sum(self.logpiG)
 
 
+@dataclass
 class Episode:
-    def __init__(self) -> None:
-        self.sum_rewards = torch.tensor(0.0)
-        self.undisc_sum_rewards = torch.tensor(0.0)
-        self.sum_logpiG = torch.tensor(0.0)
+    """Episode class to aggregate statistics over multiple trajectories
+    before a policy update.
+    Args:
+        sum_rewards: Cumulative discounted rewards over all trajectories.
+    """
+
+    sum_rewards: torch.Tensor = torch.tensor(0.0)
+    undisc_sum_rewards: torch.Tensor = torch.tensor(0.0)
+    sum_logpiG: torch.Tensor = torch.tensor(0.0)
+    trajectories: deque[Trajectory] = deque([])
 
     def append(self, trajectory: Trajectory) -> None:
-        # accumulate discounted-sum (G), undiscounted rewards and sum_logpiG
-        if hasattr(trajectory, "G"):
-            self.sum_rewards += torch.sum(trajectory.G)
-        # undiscounted sum: trajectory.rewards is a deque of numbers
+        """Append a trajectory to the episode and update statistics.
+
+        Args:
+            trajectory: The trajectory to append.
+        """
+        self.sum_rewards += torch.sum(trajectory.G)
         self.undisc_sum_rewards += torch.tensor(
             sum(trajectory.rewards), dtype=torch.get_default_dtype()
         )
-        # use precomputed sum_logpiG if available
-        if hasattr(trajectory, "sum_logpiG"):
-            self.sum_logpiG += trajectory.sum_logpiG
+        self.sum_logpiG += trajectory.sum_logpiG
+
+    @property
+    def num_trajectories(self) -> int:
+        """Return the number of trajectories in the episode."""
+        return len(self.trajectories)
+
+    def average_reward(self) -> float:
+        """Return the average reward per trajectory in the episode."""
+        if self.num_trajectories == 0:
+            return 0.0
+        return (self.sum_rewards / self.num_trajectories).item()

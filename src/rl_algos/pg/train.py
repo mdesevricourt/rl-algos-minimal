@@ -19,7 +19,7 @@ import torch
 import torch.optim as optim
 
 from rl_algos.pg.agent import Agent
-from rl_algos.pg.extra import Trajectory, Transition
+from rl_algos.pg.extra import Episode, Trajectory, Transition
 
 # print(sys.argv)
 
@@ -114,19 +114,17 @@ def main(cfg: TrainConfig) -> OnPolicyBuffer:
 
     env = gym.make(cfg.env)
     agent = Agent(env, cfg.gamma)
-    optimizer = optim.SGD(agent.policy_net.parameters(), lr=cfg.lr)
+    optimizer = optim.Adam(agent.policy_net.parameters(), lr=cfg.lr)
     buffer = OnPolicyBuffer(env, cfg)
 
     for i_epoch in range(cfg.epoch):
 
         #  Collect Trajectories
 
-        logpiG_ls: deque[torch.Tensor] = deque([])
-        sum_reward = torch.tensor(0.0)
+        episode = Episode()
 
         for _ in range(N):
             trajectory = Trajectory(cfg.gamma)
-            env.reset()
 
             state, info = env.reset()
             state = torch.tensor(state)
@@ -152,29 +150,21 @@ def main(cfg: TrainConfig) -> OnPolicyBuffer:
 
             # Estimate Returns
             trajectory.end_trajectory()  # compute discounted sum of rewards etc
-            logpiG_ls.append(trajectory.sum_logpiG / length)
-
-            sum_reward += trajectory.sum_reward
-
-        av_reward: torch.Tensor = sum_reward / torch.tensor(
-            N
-        )  # average reward across all trajectories of this epoch
-
-        sum_logpiG = torch.stack(list(logpiG_ls)).sum()
+            episode.append(trajectory)
 
         # Improve Policy
         optimizer.zero_grad()
-        loss: torch.Tensor = -sum_logpiG / N
+        loss: torch.Tensor = -episode.sum_logpiG / N
         loss.backward()
         optimizer.step()
 
         # Log Statistics
-        buffer.append(float(av_reward))
+        buffer.append(float(episode.average_reward()))
 
         if i_epoch % cfg.target_update == 0:
             print(
                 "Epoch {}\t, Average sum of rewards: {:.2f}\t, Last loss: {:.2f}".format(
-                    i_epoch, av_reward, loss
+                    i_epoch, episode.average_reward(), loss
                 )
             )
 

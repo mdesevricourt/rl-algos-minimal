@@ -1,5 +1,6 @@
 import random
 
+import gymnasium as gym
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -22,7 +23,9 @@ class PolicyNetwork(nn.Module):
         log_prob: log probability of the action.
     """
 
-    def __init__(self, env, gamma: float, num_layers: int = 3, layer_size: int = 128):
+    def __init__(
+        self, env: gym.Env, gamma: float, num_layers: int = 3, layer_size: int = 128
+    ) -> None:
         """Initialize the PolicyNetwork.
         The network builds `num_layers` hidden linear layers of size `layer_size`.
         Args:
@@ -31,7 +34,6 @@ class PolicyNetwork(nn.Module):
             num_layers: number of hidden layers.
             layer_size: neurons per hidden layer.
         """
-        super(PolicyNetwork, self).__init__()
         self.state_space = env.observation_space.shape[0]
         self.action_dim = env.action_space.shape[0]
 
@@ -83,9 +85,8 @@ class PolicyNetwork(nn.Module):
 
 
 class ValueNetwork:
-    def __init__(self):
-        pass
-        # raise NotImplementedError
+    def __init__(self) -> None:
+        raise NotImplementedError
 
 
 class Agent:
@@ -98,7 +99,7 @@ class Agent:
         log_prob: log probability of the action.
     """
 
-    def __init__(self, env, gamma: float):
+    def __init__(self, env: gym.Env, gamma: float) -> None:
         """Initialize the Agent.
         Args:
             env: OpenAI environment.
@@ -122,5 +123,5 @@ class Agent:
                 break
         m = MultivariateNormal(out1, torch.diag(out2))
         action = m.sample()
-        log_prob = m.log_prob(action)
+        log_prob = m.log_prob(action)  # type: ignore
         return (action, log_prob)
