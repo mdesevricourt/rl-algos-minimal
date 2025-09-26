@@ -9,17 +9,17 @@ It collects trajectories, computes returns, and updates the policy using collect
 
 import os
 import random
-from collections import deque, namedtuple
+from collections import deque
+from dataclasses import dataclass
 
-import gym
+import gymnasium as gym
 import pandas as pd
+import pybullet_envs_gymnasium
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 
-from drlalgos.algos.ppo.agent import Agent
-from drlalgos.algos.ppo.extra import Trajectory
+from rl_algos.pg.agent import Agent
+from rl_algos.pg.extra import Trajectory, Transition
 
 # print(sys.argv)
 
@@ -27,18 +27,28 @@ os.chdir(os.path.dirname(__file__))
 torch.manual_seed(0)
 random.seed(0)
 
-# %% Hyperparameters
 
-learning_rate = 0.01
-gamma = 0.99
-TARGET_UPDATE = 1  # number of epochs between two print statements
+# %% TrainConfig Class
+
+
+@dataclass
+class TrainConfig:
+    """Configuration for training parameters."""
+
+    epoch: int = 50  # number of epochs to train
+    N: int = 5  # number of trajectories per epoch
+    T: int = 999  # number of steps per trajectory
+    env: str = "AntBulletEnv-v0"  # environment name
+    algo: str = "ppo"  # algorithm name
+    lr: float = 0.01
+    gamma: float = 0.99  # discount factor
+    target_update: int = 1  # number of epochs between two print statements
+
+    def __str__(self) -> str:
+        return f"TrainConfig(epoch={self.epoch}, N={self.N}, T={self.T}, env='{self.env}', algo='{self.algo}', lr={self.lr}, gamma={self.gamma}, target_update={self.target_update})"
 
 
 # %% Policy
-
-Transition = namedtuple(
-    "Transition", ("state", "action", "next_state", "reward", "log_prob")
-)
 
 
 class OnPolicyBuffer(object):
@@ -47,43 +57,31 @@ class OnPolicyBuffer(object):
 
     Attributes:
         env: The environment instance.
-        epoch: Number of epochs to train.
-        gamma: Discount factor.
-        T: Number of steps per trajectory.
-        N: Number of trajectories per epoch.
-        reward_history: Deque storing reward history.
-        av_rewards: Deque storing average rewards per epoch.
-        steps: Deque storing steps per epoch.
-        cum_steps: Deque storing cumulative steps.
-        S: Total number of steps.
-        algo: Name of the algorithm.
+        cfg: Training configuration parameters.
     """
 
-    def __init__(self, env, args, gamma, N, T):
+    def __init__(self, env, cfg: TrainConfig):
         """
         Initialize the buffer.
 
         Args:
             env: The environment instance.
-            args: Arguments containing epoch and algo.
-            gamma: Discount factor.
-            N: Number of trajectories per epoch.
-            T: Number of steps per trajectory.
+            cfg: Training configuration parameters.
         """
         self.env = env
-        self.epoch = args.epoch
-        self.gamma = gamma
-        self.T = T
-        self.N = N
-        self.reward_history = deque([])
-        self.S = args.epoch * N * T  # total number of steps
-        self.av_rewards = deque([])  # list of average rewards
-        self.steps = deque([])
-        self.cum_steps = deque([])
+        self.epoch = cfg.epoch
+        self.gamma = cfg.gamma
+        self.T = cfg.T
+        self.N = cfg.N
+        self.reward_history: deque = deque([])
+        self.S_max = cfg.epoch * cfg.N * cfg.T  # total number of steps
+        self.av_rewards: deque = deque([])  # list of average rewards
+        self.steps: deque = deque([])
+        self.cum_steps: deque = deque([])
         self.S = 0
-        self.algo = args.algo
+        self.algo = cfg.algo
 
-    def append(self, av_reward):
+    def append(self, av_reward: float):
         """
         Append average reward and update step counters.
 
@@ -99,45 +97,48 @@ class OnPolicyBuffer(object):
 # %%
 
 
-def main(args):
+def main(cfg: TrainConfig) -> OnPolicyBuffer:
     """
     Main training loop for PPO.
 
     Args:
-        args: Parsed command-line arguments.
-
+        cfg: Training configuration parameters.
     Returns:
         buffer: OnPolicyBuffer containing training statistics.
     """
-    N = 5  # number of trajectories per epoch
-    T = 999  # number of steps per trajectory
+    print("Training Configuration:")
+    print(cfg)
 
-    env = gym.make(args.env)
-    agent = Agent(env, gamma)
-    optimizer = optim.SGD(agent.policy_net.parameters(), lr=learning_rate)
+    N = cfg.N  # number of trajectories per epoch
+    T = cfg.T  # number of steps per trajectory
 
-    buffer = OnPolicyBuffer(env, args, gamma, N, T)
+    env = gym.make(cfg.env)
+    agent = Agent(env, cfg.gamma)
+    optimizer = optim.SGD(agent.policy_net.parameters(), lr=cfg.lr)
+    buffer = OnPolicyBuffer(env, cfg)
 
-    for i_epoch in range(args.epoch):
+    for i_epoch in range(cfg.epoch):
 
         #  Collect Trajectories
 
-        logpiG_ls = deque([])
+        logpiG_ls: deque[torch.Tensor] = deque([])
         sum_reward = torch.tensor(0.0)
 
-        for trajectory_i in range(N):
-            trajectory = Trajectory(gamma)
+        for _ in range(N):
+            trajectory = Trajectory(cfg.gamma)
             env.reset()
 
-            state = torch.tensor(env.reset())
+            state, info = env.reset()
+            state = torch.tensor(state)
 
-            length = 0
+            length = torch.tensor(0, dtype=torch.float32)
             for t in range(T):  # for each time step in the episode
                 length += 1
                 action, log_prob = agent.select_action(
                     state
                 )  # the agent selects action based on current state
-                next_state, reward, done, _ = env.step(action)
+                next_state, reward, terminated, truncated, info = env.step(action)
+                done = terminated or truncated
 
                 transition = Transition(state, action, next_state, reward, log_prob)
                 trajectory.push(transition)
@@ -155,22 +156,22 @@ def main(args):
 
             sum_reward += trajectory.sum_reward
 
-        av_reward = (
-            sum_reward / N
+        av_reward: torch.Tensor = sum_reward / torch.tensor(
+            N
         )  # average reward across all trajectories of this epoch
 
-        sum_logpiG = sum(logpiG_ls)  # compute
+        sum_logpiG = torch.stack(list(logpiG_ls)).sum()
 
         # Improve Policy
         optimizer.zero_grad()
-        loss = -sum_logpiG / N
+        loss: torch.Tensor = -sum_logpiG / N
         loss.backward()
         optimizer.step()
 
         # Log Statistics
-        buffer.append(av_reward)
+        buffer.append(float(av_reward))
 
-        if i_epoch % TARGET_UPDATE == 0:
+        if i_epoch % cfg.target_update == 0:
             print(
                 "Epoch {}\t, Average sum of rewards: {:.2f}\t, Last loss: {:.2f}".format(
                     i_epoch, av_reward, loss
@@ -181,7 +182,8 @@ def main(args):
     return buffer
 
 
-if __name__ == "__main__":
+# %%
+def parse_args() -> TrainConfig:
     import argparse
 
     parser = argparse.ArgumentParser()
@@ -193,9 +195,13 @@ if __name__ == "__main__":
         type=str,
         help="Name of algorithm. It should be one of [pg, pgb, ppo]",
     )
-
     args = parser.parse_args()
+    return TrainConfig(**vars(args))
 
-    buffer = main(args)
+
+if __name__ == "__main__":
+    cfg = parse_args()
+
+    buffer = main(cfg)
 
     rolling_mean = pd.Series(buffer.av_rewards).rolling(10).mean()
