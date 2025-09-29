@@ -5,7 +5,8 @@ Created on Fri Oct  8 16:03:38 2021
 """
 
 from collections import deque, namedtuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from logging import warn
 
 import torch
 
@@ -104,10 +105,10 @@ class Episode:
         sum_rewards: Cumulative discounted rewards over all trajectories.
     """
 
-    sum_rewards: torch.Tensor = torch.tensor(0.0)
-    undisc_sum_rewards: torch.Tensor = torch.tensor(0.0)
-    sum_logpiG: torch.Tensor = torch.tensor(0.0)
-    trajectories: deque[Trajectory] = deque([])
+    sum_rewards: torch.Tensor = field(default_factory=lambda: torch.tensor(0.0))
+    undisc_sum_rewards: torch.Tensor = field(default_factory=lambda: torch.tensor(0.0))
+    sum_logpiG: torch.Tensor = field(default_factory=lambda: torch.tensor(0.0))
+    trajectories: deque = field(default_factory=deque)
 
     def append(self, trajectory: Trajectory) -> None:
         """Append a trajectory to the episode and update statistics.
@@ -115,6 +116,7 @@ class Episode:
         Args:
             trajectory: The trajectory to append.
         """
+        self.trajectories.append(trajectory)
         self.sum_rewards += torch.sum(trajectory.G)
         self.undisc_sum_rewards += torch.tensor(
             sum(trajectory.rewards), dtype=torch.get_default_dtype()
