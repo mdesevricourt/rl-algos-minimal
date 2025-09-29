@@ -12,7 +12,7 @@ The script takes several command-line arguments to configure the environment, al
 Run the script from the command line:
 
 ```bash
-python train.py --algo <algorithm> [--env <environment>] [--epoch <epochs>]
+python -m rl_algos.pg.train --algo <algorithm> [--env <environment>] [--epoch <epochs>]
 ```
 
 ## Arguments
