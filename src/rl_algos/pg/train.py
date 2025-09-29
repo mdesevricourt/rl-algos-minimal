@@ -13,6 +13,7 @@ from collections import deque
 from dataclasses import dataclass
 
 import gymnasium as gym
+import matplotlib.pyplot as plt
 import pandas as pd
 import pybullet_envs_gymnasium
 import torch
@@ -20,6 +21,8 @@ import torch.optim as optim
 
 from rl_algos.pg.agent import Agent
 from rl_algos.pg.extra import Episode, Trajectory, Transition
+from rl_algos.pg.trainconfig import TrainConfig
+from rl_algos.pg.trainer import PG, PPO, Algo, PGBaseline
 
 # print(sys.argv)
 
@@ -31,21 +34,15 @@ random.seed(0)
 # %% TrainConfig Class
 
 
-@dataclass
-class TrainConfig:
-    """Configuration for training parameters."""
-
-    epoch: int = 50  # number of epochs to train
-    N: int = 5  # number of trajectories per epoch
-    T: int = 999  # number of steps per trajectory
-    env: str = "AntBulletEnv-v0"  # environment name
-    algo: str = "ppo"  # algorithm name
-    lr: float = 0.01
-    gamma: float = 0.99  # discount factor
-    target_update: int = 1  # number of epochs between two print statements
-
-    def __str__(self) -> str:
-        return f"TrainConfig(epoch={self.epoch}, N={self.N}, T={self.T}, env='{self.env}', algo='{self.algo}', lr={self.lr}, gamma={self.gamma}, target_update={self.target_update})"
+# %%
+def make_trainer(agent: Agent, cfg: TrainConfig):
+    if cfg.algo == Algo.PG:
+        return PG(agent, cfg)
+    if cfg.algo == Algo.VPG:
+        return PGBaseline(agent, cfg)
+    if cfg.algo == Algo.PPO:
+        return PPO(agent, cfg)
+    raise ValueError(cfg.algo)
 
 
 # %% Policy
@@ -113,9 +110,9 @@ def main(cfg: TrainConfig) -> OnPolicyBuffer:
     T = cfg.T  # number of steps per trajectory
 
     env = gym.make(cfg.env)
-    agent = Agent(env, cfg.gamma)
-    optimizer = optim.Adam(agent.policy_net.parameters(), lr=cfg.lr)
+    agent = Agent(env)
     buffer = OnPolicyBuffer(env, cfg)
+    trainer = make_trainer(agent, cfg)
 
     for i_epoch in range(cfg.epoch):
 
@@ -135,7 +132,8 @@ def main(cfg: TrainConfig) -> OnPolicyBuffer:
                 action, log_prob = agent.select_action(
                     state
                 )  # the agent selects action based on current state
-                next_state, reward, terminated, truncated, info = env.step(action)
+                action_np = action.detach().cpu().numpy()
+                next_state, reward, terminated, truncated, info = env.step(action_np)
                 done = terminated or truncated
 
                 transition = Transition(state, action, next_state, reward, log_prob)
@@ -143,8 +141,7 @@ def main(cfg: TrainConfig) -> OnPolicyBuffer:
 
                 state = torch.tensor(next_state)
                 if done:
-                    # episode_durations.append(t + 1)
-                    # plot_durations()
+
                     print("Trajectory stopped at time ", t)
                     break
 
@@ -153,19 +150,14 @@ def main(cfg: TrainConfig) -> OnPolicyBuffer:
             episode.append(trajectory)
 
         # Improve Policy
-        optimizer.zero_grad()
-        loss: torch.Tensor = -episode.sum_logpiG / N
-        loss.backward()
-        optimizer.step()
+        trainer.update(episode)
 
         # Log Statistics
         buffer.append(float(episode.average_reward()))
 
         if i_epoch % cfg.target_update == 0:
             print(
-                "Epoch {}\t, Average sum of rewards: {:.2f}\t, Last loss: {:.2f}".format(
-                    i_epoch, episode.average_reward(), loss
-                )
+                f"Epoch {i_epoch},\tAverage sum of rewards: {episode.average_reward():.2f},\tPolicy Loss: {trainer.last_policy_loss:.3f}, Value Loss: {trainer.last_value_loss:.3f}\t"
             )
 
     env.close()
@@ -181,7 +173,7 @@ def parse_args() -> TrainConfig:
     parser.add_argument("--epoch", default=50, type=int)
     parser.add_argument(
         "--algo",
-        required=True,
+        default="ppo",
         type=str,
         help="Name of algorithm. It should be one of [pg, pgb, ppo]",
     )
@@ -195,3 +187,11 @@ if __name__ == "__main__":
     buffer = main(cfg)
 
     rolling_mean = pd.Series(buffer.av_rewards).rolling(10).mean()
+    # add title with config
+    plt.title(f"Training Curve: {cfg.env} with {cfg.algo.upper()}")
+    plt.plot(buffer.cum_steps, buffer.av_rewards, label="Average Reward")
+    plt.plot(buffer.cum_steps, rolling_mean, label="Rolling Mean (10)")
+    plt.xlabel("Steps")
+    plt.ylabel("Average Reward")
+    plt.legend()
+    plt.show()
